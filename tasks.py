@@ -5,8 +5,7 @@ Make-like task automation for Windows using python invoke
 Supports:
 
 inv clean
-inv build
-inv show
+inv pep8
 inv push <message>
 
 Based on:
@@ -18,7 +17,6 @@ Original Windows workaround for invoke:
     https://github.com/pyinvoke/invoke/issues/371#issuecomment-259711426
 
 """
-import sys
 import os
 import shutil
 
@@ -37,42 +35,54 @@ def remove(path):
         shutil.rmtree(path)
 
 
-def remove_folder(folder, exclude=[".git", ".nojekyll"]):
-    for path in os.listdir(folder):
-        if path not in exclude:
-            fullpath = os.path.join(folder, path)
-            print("Deleting:", fullpath)
-            remove(fullpath)
-
-
-def walk_files(directory: Path):
+def all_files(directory):
     for _insider in directory.iterdir():
         if _insider.is_dir():
-            subs = walk_files(_insider.resolve())
+            subs = all_files(_insider.resolve())
             for _sub in subs:
                 yield _sub.resolve()
         else:
             yield _insider.resolve()
 
 
-def yield_python_files(folder):
-    for file in filter(lambda x: x.suffix == ".py", walk_files(folder)):
-        yield file
+class Folder:
+    def __init__(self, path="."):
+        self.directory = Path(path)
+
+    @property
+    def subdirs(self):
+        return list(Path(x[0]) for x in os.walk(self.directory))
+
+    @property
+    def files(self):
+        return list(all_files(self.directory))
+
+
+def mask_by_suffix(extension, gen):
+    return filter(lambda x: x.suffix == extension, gen)
+
+
+def mask_by_name(name, gen):
+    return filter(lambda x: x.stem == name, gen)
 
 
 @task
 def pep8(ctx, folder=''):
-    #path = PROJECT_DIR / 'src' / folder
-    for f in yield_python_files(Path(".")):
+    for f in mask_by_suffix(".py", Folder(".").files):
         print("Formatting", f)
-        # FIXME: may use 'import autopep8' without console
         ctx.run("autopep8 --aggressive --aggressive --in-place {}".format(f))
 
 
 @task
 def clean(ctx):
-    """Wipe html documentation (not implemented)"""
-    remove_folder("gh-pages")
+    # find . -name \*.pyc -delete
+    for file in mask_by_suffix(".pyc", Folder(".").files):
+        file.unlink()
+        print("Deleted", file)
+    # find . -name __pycache__ -delete
+    for d in mask_by_name("__pycache__", Folder(".").subdirs):
+        shutil.rmtree(d)
+        print("Deleted", d)
 
 
 def run(ctx, cmd):
@@ -91,41 +101,22 @@ def ls(ctx):
 
 
 @task
-def html(ctx):
-    """Build html documentation with `sphinx-build`"""
-    # WONT FIX: output is colorless
-    run(ctx, "sphinx-build -b html docs gh-pages -c .")
-
-
-@task
-def pdf(ctx):
-    pass
+def docs(ctx, subcommand):
+    if subcommand == 'apidoc':
+        run(ctx, "sphinx-apidoc -fM -o docs/source boo */test*")
+    if subcommand == 'make':
+        run(ctx, "docs\make.bat html")
+    if subcommand == 'show':
+        run(ctx, 'start docs/build/html/index.html')
 
 
 def quote(s):
-    QUOTECHAR = '"'  # this is "
+    QUOTECHAR = '"'  # this is <">
     return f"{QUOTECHAR}{s}{QUOTECHAR}"
 
 
-@task
-def push(ctx, message="build html"):
-    """Build html documentation"""
-    commands = ["cd gh-pages",
-                "git add .",
-                "git commit -am%s" % quote(message),
-                "git push",
-                "cd .."]
-    run_all(ctx, commands)
-
-
-@task
-def show(ctx):
-    """Show documentation in default browser"""
-    run(ctx, "start gh-pages/index.html")
-
-
 ns = Collection()
-for t in [ls, clean, html, show, push, pdf, pep8]:
+for t in [ls, clean, pep8, docs]:
     ns.add_task(t)
 
 
